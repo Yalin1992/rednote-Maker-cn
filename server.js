@@ -1,9 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import geoip from 'geoip-lite';
-import { GoogleGenAI, Type } from '@google/genai';
 import OpenAI from 'openai';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config({ path: '.env.local' });
 
@@ -14,8 +14,6 @@ app.use(cors());
 app.use(express.json());
 
 // --- CONFIGURATION ---
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,44 +57,6 @@ Your ONLY job is to convert the input text into a JSON array structure.
 
 // --- AI HANDLERS ---
 
-async function callGemini(text, systemInstruction) {
-    if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
-
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-    const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash-exp",
-        contents: text,
-        config: {
-            systemInstruction: systemInstruction,
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        type: { type: Type.STRING, enum: ["cover", "content"] },
-                        title: { type: Type.STRING },
-                        subtitle: { type: Type.STRING },
-                        content: {
-                            type: Type.ARRAY,
-                            items: { type: Type.STRING }
-                        },
-                        category: { type: Type.STRING },
-                        tags: {
-                            type: Type.ARRAY,
-                            items: { type: Type.STRING }
-                        }
-                    },
-                    required: ["type", "title", "content"],
-                },
-            },
-        },
-    });
-
-    return JSON.parse(response.text() || "[]");
-}
-
 async function callDeepSeek(text, systemInstruction) {
     const apiKey = process.env.DEEPSEEK_API_KEY ? process.env.DEEPSEEK_API_KEY.trim() : "";
     if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
@@ -106,20 +66,21 @@ async function callDeepSeek(text, systemInstruction) {
         apiKey: apiKey
     });
 
-    const completion = await openai.chat.completions.create({
-        messages: [
-            { role: "system", content: systemInstruction + "\n\nResponse MUST be a JSON array." },
-            { role: "user", content: text }
-        ],
-        model: "deepseek-chat",
-        response_format: { type: "json_object" },
-    });
-
-    // Note: DeepSeek might return an object wrapping the array or just the array string. 
-    // We need to parse robustly.
-    const content = completion.choices[0].message.content;
     try {
+        const completion = await openai.chat.completions.create({
+            messages: [
+                { role: "system", content: systemInstruction + "\n\nResponse MUST be a JSON array." },
+                { role: "user", content: text }
+            ],
+            model: "deepseek-chat",
+            response_format: { type: "json_object" },
+        });
+
+        // Note: DeepSeek might return an object wrapping the array or just the array string. 
+        // We need to parse robustly.
+        const content = completion.choices[0].message.content;
         const parsed = JSON.parse(content);
+
         // If it's wrapped in an object keys like { "slides": [] }, extract it.
         if (!Array.isArray(parsed)) {
             // simple heuristic
@@ -130,8 +91,8 @@ async function callDeepSeek(text, systemInstruction) {
         }
         return parsed;
     } catch (e) {
-        console.error("DeepSeek Parse Error", e);
-        throw new Error("Failed to parse DeepSeek JSON");
+        console.error("DeepSeek API Error", e);
+        throw new Error("Failed to call or parse DeepSeek API");
     }
 }
 
@@ -142,25 +103,7 @@ app.post('/api/generate', async (req, res) => {
         const { text, title, subtitle } = req.body;
         if (!text) return res.status(400).json({ error: "Text is required" });
 
-        // 1. IP Detection
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        // Handle localhost/ipv6
-        const cleanIp = Array.isArray(ip) ? ip[0] : ip?.split(',')[0].trim();
-
-        // Default to Env var or 'US'
-        // FIX: Trim whitespace/newlines from env var to prevent "CN\r" !== "CN" issues
-        let envRegion = process.env.DEFAULT_REGION ? process.env.DEFAULT_REGION.trim() : null;
-        let country = envRegion || 'US';
-
-        const geo = geoip.lookup(cleanIp);
-        if (geo) {
-            country = geo.country;
-        } else {
-            // Fallback for local/private IPs
-            country = envRegion || 'US';
-        }
-
-        console.log(`[API] Request from IP: ${cleanIp}, Detected Country: ${country}, Env Default: ${envRegion}`);
+        console.log(`[API] Request received. Using DeepSeek for all requests.`);
 
         // 2. Prepare Prompt for METADATA ONLY
         const safeTitle = title || 'Main Title';
@@ -189,19 +132,8 @@ CRITICAL:
         let metadata; // { title, subtitle, category, tags, quote }
 
         // 3. Route to AI for Metadata
-        let aiResultRaw;
-        if (country === 'CN') {
-            console.log("Routing to DeepSeek (CN) for Metadata...");
-            try {
-                aiResultRaw = await callDeepSeek(text, METADATA_INSTRUCTION);
-            } catch (dsError) {
-                console.error("DeepSeek failed, falling back to Gemini...", dsError);
-                aiResultRaw = await callGemini(text, METADATA_INSTRUCTION);
-            }
-        } else {
-            console.log("Routing to Gemini (Global) for Metadata...");
-            aiResultRaw = await callGemini(text, METADATA_INSTRUCTION);
-        }
+        // Always usage DeepSeek
+        let aiResultRaw = await callDeepSeek(text, METADATA_INSTRUCTION);
 
         // Handle if AI returns array or object
         if (Array.isArray(aiResultRaw)) {
