@@ -146,7 +146,8 @@ app.post('/api/generate', async (req, res) => {
         // Handle localhost/ipv6
         const cleanIp = Array.isArray(ip) ? ip[0] : ip?.split(',')[0].trim();
 
-        let country = 'US';
+        // Default to Env var or 'US'
+        let country = process.env.DEFAULT_REGION || 'US';
         const geo = geoip.lookup(cleanIp);
         if (geo) {
             country = geo.country;
