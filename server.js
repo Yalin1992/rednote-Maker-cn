@@ -239,7 +239,8 @@ CRITICAL:
 });
 
 // --- PRODUCTION SERVE ---
-app.get('*', (req, res) => {
+// Fix: Use Regex /.*/ for catch-all in Express 5 to avoid path-to-regexp error
+app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
