@@ -98,11 +98,12 @@ async function callGemini(text, systemInstruction) {
 }
 
 async function callDeepSeek(text, systemInstruction) {
-    if (!process.env.DEEPSEEK_API_KEY) throw new Error("Missing DEEPSEEK_API_KEY");
+    const apiKey = process.env.DEEPSEEK_API_KEY ? process.env.DEEPSEEK_API_KEY.trim() : "";
+    if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
 
     const openai = new OpenAI({
         baseURL: 'https://api.deepseek.com',
-        apiKey: process.env.DEEPSEEK_API_KEY
+        apiKey: apiKey
     });
 
     const completion = await openai.chat.completions.create({
@@ -147,16 +148,19 @@ app.post('/api/generate', async (req, res) => {
         const cleanIp = Array.isArray(ip) ? ip[0] : ip?.split(',')[0].trim();
 
         // Default to Env var or 'US'
-        let country = process.env.DEFAULT_REGION || 'US';
+        // FIX: Trim whitespace/newlines from env var to prevent "CN\r" !== "CN" issues
+        let envRegion = process.env.DEFAULT_REGION ? process.env.DEFAULT_REGION.trim() : null;
+        let country = envRegion || 'US';
+
         const geo = geoip.lookup(cleanIp);
         if (geo) {
             country = geo.country;
         } else {
-            // Fallback for local/private IPs (default to CN if specified in .env, or US)
-            country = process.env.DEFAULT_REGION || 'US';
+            // Fallback for local/private IPs
+            country = envRegion || 'US';
         }
 
-        console.log(`[API] Request from IP: ${cleanIp}, Country: ${country}`);
+        console.log(`[API] Request from IP: ${cleanIp}, Detected Country: ${country}, Env Default: ${envRegion}`);
 
         // 2. Prepare Prompt for METADATA ONLY
         const safeTitle = title || 'Main Title';
